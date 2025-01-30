@@ -50,12 +50,15 @@ module branch_controller (
                         : dec_branch_decoded.target;
         end
 
-        wire outcome;
+
+	//----------------------------------- Branch Mispredict Counter -------------------------------------------------
+        wire outcome, curr_prediction;
         assign outcome = (ex_branch_result.outcome === NOT_TAKEN) ? 0 : ( (ex_branch_result.outcome === TAKEN) ? 1 : 0);
+	assign curr_prediction = (dec_branch_decoded.prediction === NOT_TAKEN) ? 0 : ( (dec_branch_decoded.prediction === TAKEN) ? 1 : 0);
         reg prev_prediction;
         always_ff @(posedge clk) begin
                 if(~rst_n)              		prev_prediction <= 'd0;
-                else if(ex_branch_result.valid)     	prev_prediction <= (dec_branch_decoded.prediction === NOT_TAKEN) ? 0 : ( (dec_branch_decoded.prediction === TAKEN) ? 1 : 0);
+                else if(ex_branch_result.valid)     	prev_prediction <= curr_prediction;
         end
 
         reg [31:0] branch_count;
@@ -67,13 +70,13 @@ module branch_controller (
         reg [31:0] correct_count;
         always_ff @(posedge clk) begin
                 if(~rst_n)              		correct_count <= 'd0;
-                else if(ex_branch_result.valid)     	correct_count <= correct_count + (prev_prediction == outcome);
+                else if(ex_branch_result.valid)     	correct_count <= correct_count + (curr_prediction == outcome);
         end
 
         reg [31:0] incorrect_count;
         always_ff @(posedge clk) begin
                 if(~rst_n)              		incorrect_count <= 'd0;
-                else if(ex_branch_result.valid)     	incorrect_count <= incorrect_count + (prev_prediction != outcome);
+                else if(ex_branch_result.valid)     	incorrect_count <= incorrect_count + (curr_prediction != outcome);
         end
 
         always_ff @(posedge clk) begin
@@ -83,6 +86,7 @@ module branch_controller (
 				$stop;
 		end
         end
+	//---------------------------------------------------------------------------------------------------------------
 
 
 endmodule
@@ -188,7 +192,7 @@ module SAT_CNT_2bit (
         assign outcome = (i_fb_outcome === NOT_TAKEN) ? 0 : ( (i_fb_outcome === TAKEN) ? 1 : 0);
 
 
-        localparam N = 2;
+        parameter N = 2;
 
         logic [N-1:0] counter;
 
@@ -252,7 +256,8 @@ module branch_predictor_global (
         assign outcome = (i_fb_outcome === NOT_TAKEN) ? 0 : ( (i_fb_outcome === TAKEN) ? 1 : 0);
 
         localparam N = 2;
-        localparam M = 6; // History bits
+        localparam M = 9; // History bits
+	localparam PC_OFFSET = 2;
 
         reg [M-1:0] GHR ;  // Global History Register
         wire [2**M-1:0] PRED ;
@@ -263,13 +268,25 @@ module branch_predictor_global (
                 else if(i_fb_valid)     GHR <= {GHR[M-2:0],outcome};
         end
 
+	// reg i_fb_valid_d;
+	// always_ff @(posedge clk) begin
+	// 	if(~rst_n)		i_fb_valid_d <= 'd0;
+	// 	else			i_fb_valid_d <= i_fb_valid;
+	// end
+	// reg i_fb_outcome_d;
+	// always_ff @(posedge clk) begin
+	// 	if(~rst_n)		i_fb_outcome_d <= 'd0;
+	// 	else			i_fb_outcome_d <= i_fb_outcome;
+	// end
+	
+
         genvar i;
         generate
                 for(i=0; i<2**M; i=i+1) begin : SATCNT_2BIT
-                        SAT_CNT_2bit SAT_CNT_2BIT (
+                        SAT_CNT_2bit #(.N(N)) SAT_CNT_2BIT (
                                 .clk, .rst_n,
                                 .o_req_prediction(PRED[i]),
-                                .i_fb_valid      (i_fb_valid & (i == (GHR /*^ i_req_pc[M+1  -: M]*/) )),
+                                .i_fb_valid      (i_fb_valid & (i == (GHR ^ i_req_pc[M+PC_OFFSET-1  -: M]) )),
                                 .i_fb_outcome    (i_fb_outcome)
                         );
                 end
@@ -280,7 +297,7 @@ module branch_predictor_global (
         always_comb
         begin
                 // o_req_prediction = counter[N-1] ? TAKEN : NOT_TAKEN;
-                o_req_prediction = PRED[GHR /*^ i_req_pc[M+1  -: M]*/] ? TAKEN : NOT_TAKEN;
+                o_req_prediction = PRED[GHR ^ i_req_pc[M+PC_OFFSET-1  -: M]] ? TAKEN : NOT_TAKEN;
                 // o_req_prediction = PRED[GHR] ? TAKEN : NOT_TAKEN;
                 // o_req_prediction = PRED[0] ? TAKEN : NOT_TAKEN;
                 // o_req_prediction = TAKEN;
