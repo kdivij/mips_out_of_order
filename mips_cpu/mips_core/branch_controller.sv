@@ -29,7 +29,8 @@ module branch_controller (
         // branch_predictor_always_taken PREDICTOR (
         // branch_predictor_2bit PREDICTOR (
         // branch_predictor_global PREDICTOR (
-	branch_predictor_2level_local PREDICTOR (
+	// branch_predictor_2level_local PREDICTOR (
+	branch_predictor_tournament PREDICTOR (
                 .clk, .rst_n,
 
                 .i_req_valid     (request_prediction),
@@ -425,5 +426,109 @@ module branch_predictor_2level_local (
                 // o_req_prediction = counter[N-1] ? TAKEN : NOT_TAKEN;
                 o_req_prediction = PRED[PHT_INDEX_PREDICT] ? TAKEN : NOT_TAKEN;
         end
+
+endmodule
+
+module branch_predictor_tournament (
+        input clk,    // Clock
+        input rst_n,  // Synchronous reset active low
+
+        // Request
+        input logic i_req_valid,
+        input logic [`ADDR_WIDTH - 1 : 0] i_req_pc,
+        input logic [`ADDR_WIDTH - 1 : 0] i_req_target,
+        output mips_core_pkg::BranchOutcome o_req_prediction,
+
+        // Feedback
+        input logic i_fb_valid,
+        input logic [`ADDR_WIDTH - 1 : 0] i_fb_pc,
+        input mips_core_pkg::BranchOutcome i_fb_prediction,
+        input mips_core_pkg::BranchOutcome i_fb_outcome
+);
+
+	localparam N = 2;
+	localparam M = 10;
+	localparam PC_OFFSET = 2;
+
+        wire mips_core_pkg::BranchOutcome 	o_req_pred_local_t;
+        wire mips_core_pkg::BranchOutcome 	o_req_pred_gshare_t;
+        wire  					o_req_pred_local;
+        wire  					o_req_pred_gshare;
+
+        assign o_req_pred_local = (o_req_pred_local_t === NOT_TAKEN) ? 0 : ( (o_req_pred_local_t === TAKEN) ? 1 : 0);
+        assign o_req_pred_gshare = (o_req_pred_gshare_t === NOT_TAKEN) ? 0 : ( (o_req_pred_gshare_t === TAKEN) ? 1 : 0);
+
+	// Predictor 0
+	branch_predictor_2level_local bp_local (
+                .clk, .rst_n,
+
+                .i_req_valid     (i_req_valid),
+                .i_req_pc        (i_req_pc),
+                .i_req_target    (i_req_target),
+                .o_req_prediction(o_req_pred_local_t),
+
+                .i_fb_valid      (i_fb_valid),
+                .i_fb_pc         (i_fb_pc),
+                .i_fb_prediction (i_fb_prediction),
+                .i_fb_outcome    (i_fb_outcome)
+        );
+
+	// Predictor 1
+	branch_predictor_global bp_gshare (
+                .clk, .rst_n,
+
+                .i_req_valid     (i_req_valid),
+                .i_req_pc        (i_req_pc),
+                .i_req_target    (i_req_target),
+                .o_req_prediction(o_req_pred_gshare_t),
+
+                .i_fb_valid      (i_fb_valid),
+                .i_fb_pc         (i_fb_pc),
+                .i_fb_prediction (i_fb_prediction),
+                .i_fb_outcome    (i_fb_outcome)
+        );
+
+	// Meta Predictor
+        wire [2**M-1:0] PRED ;
+	wire [M-1:0] 	META_INDEX_UPDATE;
+	assign 		META_INDEX_UPDATE  =  i_fb_pc[M+PC_OFFSET-1  -: M] ;
+
+	wire [M-1:0] 	META_INDEX_PREDICT;
+	assign 		META_INDEX_PREDICT = i_req_pc[M+PC_OFFSET-1  -: M] ;
+
+	reg w_fb_pred_local;
+	always_ff  @(posedge clk) begin
+		if(~rst_n)			w_fb_pred_local <= 1'b0;
+		else if(i_req_valid)		w_fb_pred_local <= o_req_pred_local;
+	end
+
+	reg w_fb_pred_gshare;
+	always_ff  @(posedge clk) begin
+		if(~rst_n)			w_fb_pred_gshare <= 1'b0;
+		else if(i_req_valid)		w_fb_pred_gshare <= o_req_pred_gshare;
+	end
+
+
+
+	// Training the Meta Predictor
+	wire choice_predictor;
+	assign choice_predictor = i_fb_outcome == w_fb_pred_local ? 0 : 1; 
+
+        genvar i;
+        generate
+                for(i=0; i<2**M; i=i+1) begin : SATCNT_2BIT
+                        SAT_CNT_2bit #(.N(N)) SAT_CNT_2BIT (
+                                .clk, .rst_n,
+                                .o_req_prediction(PRED[i]),
+                                .i_fb_valid      (i_fb_valid & (i ==  META_INDEX_UPDATE) & (w_fb_pred_local ^ w_fb_pred_gshare)), 
+                                .i_fb_outcome    (choice_predictor) 	// Predictor 0 (local) or predictor 1 (gshare)
+                        );
+                end
+        endgenerate
+
+
+	// Predicter Selection Mux
+	assign o_req_prediction = PRED[META_INDEX_PREDICT] == 0 ? o_req_pred_local_t : o_req_pred_gshare_t ;
+
 
 endmodule
