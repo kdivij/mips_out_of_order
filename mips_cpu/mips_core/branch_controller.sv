@@ -28,7 +28,8 @@ module branch_controller (
         // branch_predictor_always_not_taken PREDICTOR (
         // branch_predictor_always_taken PREDICTOR (
         // branch_predictor_2bit PREDICTOR (
-        branch_predictor_global PREDICTOR (
+        // branch_predictor_global PREDICTOR (
+	branch_predictor_2level_local PREDICTOR (
                 .clk, .rst_n,
 
                 .i_req_valid     (request_prediction),
@@ -354,72 +355,75 @@ module branch_predictor_global (
 
 endmodule
 
-// module branch_predictor_two_level_local (
-//         input clk,    // Clock
-//         input rst_n,  // Synchronous reset active low
-// 
-//         // Request
-//         input logic i_req_valid,
-//         input logic [`ADDR_WIDTH - 1 : 0] i_req_pc,
-//         input logic [`ADDR_WIDTH - 1 : 0] i_req_target,
-//         output mips_core_pkg::BranchOutcome o_req_prediction,
-// 
-//         // Feedback
-//         input logic i_fb_valid,
-//         input logic [`ADDR_WIDTH - 1 : 0] i_fb_pc,
-//         input mips_core_pkg::BranchOutcome i_fb_prediction,
-//         input mips_core_pkg::BranchOutcome i_fb_outcome
-// );
-// 
-//         wire outcome;
-//         assign outcome = (i_fb_outcome === NOT_TAKEN) ? 0 : ( (i_fb_outcome === TAKEN) ? 1 : 0);
-// 
-//         localparam N = 2;
-//         localparam M = 9; // History bits
-// 	localparam PC_NUMBITS_1 = 5;
-// 	localparam PC_NUMBITS_2 = 2;
-// 
-// 	wire [PC_NUMBITS_1-1:0] PC_INDEX_1;
-// 	wire [PC_NUMBITS_2-1:0] PC_INDEX_2;
-// 
-// 	assign 
-// 
-// 
-//         reg [M-1:0] BHR [0:2**PC_NUMBITS_1-1];  // Branch History Register
-//         wire [2**M-1:0] PRED ;
-// 
-// 
-// 	genvar i;
-// 	generate
-// 		for(i=0;i<2**PC_NUMBITS_1; i=i+1) begin
-//         		always_ff @(posedge clk) begin
-//         		        if(~rst_n)              			BHR[i] <= 'd0;
-//         		        else if(i_fb_valid & (i == PC_INDEX_1))    	BHR[i] <= {BHR[i][M-2:0],outcome};
-//         		end
-// 		end
-// 	endgenerate
-// 
-//         generate
-//                 for(i=0; i<2**M; i=i+1) begin : SATCNT_2BIT
-//                         SAT_CNT_2bit #(.N(N)) SAT_CNT_2BIT (
-//                                 .clk, .rst_n,
-//                                 .o_req_prediction(PRED[i]),
-//                                 .i_fb_valid      (i_fb_valid & (i == (GHR ^ i_req_pc[M+PC_OFFSET-1  -: M]) )),
-//                                 .i_fb_outcome    (i_fb_outcome)
-//                         );
-//                 end
-//         endgenerate
-// 
-// 
-// 
-//         always_comb
-//         begin
-//                 // o_req_prediction = counter[N-1] ? TAKEN : NOT_TAKEN;
-//                 o_req_prediction = PRED[GHR ^ i_req_pc[M+PC_OFFSET-1  -: M]] ? TAKEN : NOT_TAKEN;
-//                 // o_req_prediction = PRED[GHR] ? TAKEN : NOT_TAKEN;
-//                 // o_req_prediction = PRED[0] ? TAKEN : NOT_TAKEN;
-//                 // o_req_prediction = TAKEN;
-//         end
-// 
-// endmodule
+module branch_predictor_2level_local (
+        input clk,    // Clock
+        input rst_n,  // Synchronous reset active low
 
+        // Request
+        input logic i_req_valid,
+        input logic [`ADDR_WIDTH - 1 : 0] i_req_pc,
+        input logic [`ADDR_WIDTH - 1 : 0] i_req_target,
+        output mips_core_pkg::BranchOutcome o_req_prediction,
+
+        // Feedback
+        input logic i_fb_valid,
+        input logic [`ADDR_WIDTH - 1 : 0] i_fb_pc,
+        input mips_core_pkg::BranchOutcome i_fb_prediction,
+        input mips_core_pkg::BranchOutcome i_fb_outcome
+);
+
+        wire outcome;
+        assign outcome = (i_fb_outcome === NOT_TAKEN) ? 0 : ( (i_fb_outcome === TAKEN) ? 1 : 0);
+
+        localparam PHT_N = 2;
+	localparam PHT_ENTRIES = 10;
+        localparam M = 5;
+	localparam K = 6;
+	localparam N = PHT_ENTRIES - M; 
+	localparam PC_OFFSET = 2;
+
+        reg [M-1:0] BHT [0:2**K-1] ;  // Global History Register
+        wire [2**PHT_ENTRIES-1:0] PRED ;
+
+        wire [N+M-1:0] 	PHT_INDEX_UPDATE;
+	wire [K-1:0]	BHT_INDEX_UPDATE;
+	assign BHT_INDEX_UPDATE  = i_fb_pc[K+PC_OFFSET-1  -: K] ;
+	assign PHT_INDEX_UPDATE  = {i_fb_pc[N+PC_OFFSET-1  -: N],BHT[BHT_INDEX_UPDATE]} ;
+
+        wire [N+M-1:0] 	PHT_INDEX_PREDICT;
+	wire [K-1:0]	BHT_INDEX_PREDICT;
+	wire [M-1:0]	BHT_ENTRY;
+	assign BHT_ENTRY	  = BHT[BHT_INDEX_PREDICT];
+	assign BHT_INDEX_PREDICT  = i_req_pc[K+PC_OFFSET-1  -: K] ;
+	assign PHT_INDEX_PREDICT  = {i_req_pc[N+PC_OFFSET-1  -: N],BHT_ENTRY} ;
+
+        genvar i;
+	generate
+		for(i=0; i<2**K; i=i+1) begin
+        		always_ff @(posedge clk) begin
+        		        if(~rst_n)              			BHT[i] <= 'd0;
+        		        else if(i_fb_valid & (i == BHT_INDEX_UPDATE))   BHT[i] <= {BHT[i][M-2:0],outcome};
+        		end
+		end
+	endgenerate
+
+        generate
+                for(i=0; i<2**PHT_ENTRIES; i=i+1) begin : SATCNT_2BIT
+                        SAT_CNT_2bit #(.N(PHT_N)) SAT_CNT_2BIT (
+                                .clk, .rst_n,
+                                .o_req_prediction(PRED[i]),
+                                .i_fb_valid      (i_fb_valid & (i ==  PHT_INDEX_UPDATE)),
+                                .i_fb_outcome    (i_fb_outcome)
+                        );
+                end
+        endgenerate
+
+
+
+        always_comb
+        begin
+                // o_req_prediction = counter[N-1] ? TAKEN : NOT_TAKEN;
+                o_req_prediction = PRED[PHT_INDEX_PREDICT] ? TAKEN : NOT_TAKEN;
+        end
+
+endmodule
