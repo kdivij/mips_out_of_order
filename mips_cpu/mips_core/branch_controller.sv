@@ -314,7 +314,7 @@ module branch_predictor_global (
 
         localparam N = 2;
         localparam M = 9; // History bits
-	localparam PC_OFFSET = 2;
+	localparam PC_OFFSET = 8;
 
         reg [M-1:0] GHR ;  // Global History Register
         reg [M-1:0] GHR_PREV ;  // Global History Register
@@ -381,21 +381,22 @@ module branch_predictor_2level_local (
         localparam M = 5;
 	localparam K = 6;
 	localparam N = PHT_ENTRIES - M; 
-	localparam PC_OFFSET = 2;
+	localparam PC_OFFSET = 2; 	// PC goes 0,4,8 ... 
+	localparam PC_OFFSET_BHT = 4; 	// To allow BHT store more localized global history
 
         reg [M-1:0] BHT [0:2**K-1] ;  // Global History Register
         wire [2**PHT_ENTRIES-1:0] PRED ;
 
         wire [N+M-1:0] 	PHT_INDEX_UPDATE;
 	wire [K-1:0]	BHT_INDEX_UPDATE;
-	assign BHT_INDEX_UPDATE  = i_fb_pc[K+PC_OFFSET-1  -: K] ;
+	assign BHT_INDEX_UPDATE  = i_fb_pc[K+PC_OFFSET+PC_OFFSET_BHT-1  -: K] ;
 	assign PHT_INDEX_UPDATE  = {i_fb_pc[N+PC_OFFSET-1  -: N],BHT[BHT_INDEX_UPDATE]} ;
 
         wire [N+M-1:0] 	PHT_INDEX_PREDICT;
 	wire [K-1:0]	BHT_INDEX_PREDICT;
 	wire [M-1:0]	BHT_ENTRY;
 	assign BHT_ENTRY	  = BHT[BHT_INDEX_PREDICT];
-	assign BHT_INDEX_PREDICT  = i_req_pc[K+PC_OFFSET-1  -: K] ;
+	assign BHT_INDEX_PREDICT  = i_req_pc[K+PC_OFFSET+PC_OFFSET_BHT-1  -: K] ;
 	assign PHT_INDEX_PREDICT  = {i_req_pc[N+PC_OFFSET-1  -: N],BHT_ENTRY} ;
 
         genvar i;
@@ -447,8 +448,8 @@ module branch_predictor_tournament (
 );
 
 	localparam N = 2;
-	localparam M = 10;
-	localparam PC_OFFSET = 2;
+	localparam M = 8;
+	localparam PC_OFFSET = 8;
 
         wire mips_core_pkg::BranchOutcome 	o_req_pred_local_t;
         wire mips_core_pkg::BranchOutcome 	o_req_pred_gshare_t;
